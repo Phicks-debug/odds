@@ -58,4 +58,4 @@ The schema is in `supabase/migrations/` and the older setup files in the reposit
 
 ## License
 
-No license has been chosen yet, so all rights are reserved. Open an issue if you want to reuse something.
+All rights reserved. The code is public so it can be read, not so it can be copied, run, sold or reused: see [LICENSE](LICENSE). To ask for permission, open an issue. The job postings, employer names and logos, Statistics Netherlands, IND and Belastingdienst figures, and any people data belong to their own owners and sources.

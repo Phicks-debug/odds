@@ -1,0 +1,47 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.env.local
+
+# Playwright
+test-results
+playwright-report
+.env.secrets
+
+# Added 3 Oct 2026 before publishing: nothing below should reach GitHub.
+.env
+.env.*
+!.env.example
+!.env.secrets.example
+supabase/.temp/
+.claude/settings.local.json
+# Scraped posting text (third-party recruiter names and e-mail addresses inside), audit dumps and bulky local videos/renders
+ADD_INDEED_POSTINGS.sql
+scripts/audit/out/
+brag-output*/
+public/brag/brag-1080.mp4
+public/brag/brag-4k.mp4
+public/outreach/*.mp4
+public/outreach/*.bak

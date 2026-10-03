@@ -1,0 +1,165 @@
+import { levelOf, LEVELS, type Level } from "@/lib/engine"
+import { FAMILIES, guessFamily } from "@/lib/field"
+import { industryOf, type Industry } from "@/lib/industries"
+import { cityOf, jobTypesOf, workplaceOf, type JobType, type Workplace } from "@/lib/job-facts"
+import type { Reference } from "@/lib/jobs"
+import type { Signals } from "@/lib/jobs"
+import { sourceNamesOf } from "@/lib/sources"
+import { payMid } from "@/lib/spec"
+import type { Posting } from "@/lib/types"
+
+/**
+ * Narrowing the list, done on the postings the page already holds. The whole
+ * pool loads in one go, so a filter is a pure function over that array.
+ */
+export interface JobFilters {
+  /** Words that must all appear in the title, company, place, industry or level. */
+  query: string
+  /** Any of these lines of work (the job's own family, whatever the employer does). Empty is any. */
+  field: string[]
+  /** Any of these employer industries. Empty is any industry. */
+  industry: Industry[]
+  /** Any of these levels. Empty is any level. */
+  level: Level[]
+  /** Null is any language; "english" keeps postings that do not require Dutch. One or the other, so there is nothing to multi-select. */
+  language: Array<"english" | "dutch">
+  /** Only employers on the IND register of recognised sponsors. */
+  sponsorOnly: boolean
+  /** How recently it was posted. One window. */
+  posted: "any" | "day" | "week" | "month"
+  /** Any of these kinds of job. Empty is any kind. */
+  type: JobType[]
+  /** Any of these: remote, hybrid or on-site. Empty is anywhere. */
+  workplace: Workplace[]
+  /** Any of these towns. Empty is any town. */
+  city: string[]
+  /** Jobs whose pay, stated or typical, reaches this much a month. Null is any. One threshold. */
+  minPay: number | null
+  /** Only jobs found on any of these sites, by name. Empty is any site. */
+  source: string[]
+}
+
+/** The lines of work to filter by: what the job is, not what the employer does. "Other" is not something anyone filters for. */
+export const FIELD_OPTIONS: ReadonlyArray<string> = FAMILIES.filter((f) => f !== "Other")
+
+/** A job's line of work: Jev's reading, or the title-and-skills guess for a job Jev has not read yet. Null when neither is sure. */
+export const fieldOf = (post: Pick<Posting, "family" | "title" | "title_clean" | "skills">): string | null => post.family ?? guessFamily(post.title_clean ?? post.title, post.skills)
+
+export const NO_FILTERS: JobFilters = { query: "", field: [], industry: [], level: [], language: [], sponsorOnly: false, posted: "any", type: [], workplace: [], city: [], minPay: null, source: [] }
+
+export const POSTED_DAYS = { day: 1, week: 7, month: 30 } as const
+
+/** Levels worth offering: "Not stated" is not something anyone filters for. */
+export const LEVEL_OPTIONS: ReadonlyArray<Level> = LEVELS.filter((level) => level !== "Not stated")
+
+/** The level filter's starting point: internships and entry-level roles, an international student's first jobs. */
+export const STARTING_LEVELS: ReadonlyArray<Level> = ["Internship", "Entry"]
+
+/** What the page opens with: first jobs (the database view active_internship_entry) that do not need Dutch, posted any time. Clear all goes back to this, not to everything. */
+export const DEFAULT_FILTERS: JobFilters = { ...NO_FILTERS, level: [...STARTING_LEVELS], posted: "any", language: ["english"] }
+
+/** The same set of values, whatever the order. */
+const sameSet = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => a.length === b.length && a.every((x) => b.includes(x))
+
+/**
+ * Filters saved before several values could be chosen held one value or null (and "Starting out" for the first jobs).
+ * Reads either shape into the current one, drops anything it does not know, and fills what is missing, so a saved
+ * preference never breaks the page and never silently turns into "everything".
+ */
+export function normalizeFilters(raw: unknown): JobFilters {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>
+  const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x !== "") : typeof v === "string" && v !== "" ? [v] : [])
+  const levels = list(r.level).flatMap((l) => (l === "Starting out" ? [...STARTING_LEVELS] : [l])).filter((l): l is Level => (LEVEL_OPTIONS as ReadonlyArray<string>).includes(l))
+  const posted = r.posted === "day" || r.posted === "week" || r.posted === "month" || r.posted === "any" ? r.posted : DEFAULT_FILTERS.posted
+  const pay = typeof r.minPay === "number" && Number.isFinite(r.minPay) ? r.minPay : null
+
+  return {
+    query: typeof r.query === "string" ? r.query : "",
+    field: list(r.field).filter((f) => FIELD_OPTIONS.includes(f)),
+    industry: list(r.industry) as Industry[],
+    level: [...new Set(levels)],
+    language: [...new Set(list(r.language).filter((x): x is "english" | "dutch" => x === "english" || x === "dutch"))],
+    sponsorOnly: r.sponsorOnly === true,
+    posted,
+    type: list(r.type) as JobType[],
+    workplace: list(r.workplace) as Workplace[],
+    city: list(r.city),
+    minPay: pay,
+    source: list(r.source),
+  }
+}
+
+/** What the filters need besides the posting: the text signals and the pay tables, each absent until loaded. */
+export interface FilterEnv {
+  signals?: Record<string, Signals> | null
+  reference?: Reference | null
+}
+
+export function applyFilters<T extends Posting>(posts: ReadonlyArray<T>, filters: JobFilters, env: FilterEnv = {}): ReadonlyArray<T> {
+  const words = filters.query.toLowerCase().split(/\s+/).filter(Boolean)
+
+  return posts.filter((post) => {
+    if (words.length > 0) {
+      const hay = `${post.title} ${post.employer_display} ${post.region ?? ""} ${fieldOf(post) ?? ""} ${industryOf(post) ?? ""} ${levelOf(post)}`.toLowerCase()
+      if (!words.every((w) => hay.includes(w))) {
+        return false
+      }
+    }
+    if (filters.field.length > 0 && !filters.field.includes(fieldOf(post) ?? "")) {
+      return false
+    }
+    if (filters.industry.length > 0 && !filters.industry.includes(industryOf(post) as Industry)) {
+      return false
+    }
+    if (filters.level.length > 0 && !filters.level.includes(levelOf(post))) {
+      return false
+    }
+    // English keeps jobs that do not need Dutch, Dutch keeps the ones that do; both ticked, or none, is every job.
+    if (filters.language.length === 1 && filters.language[0] === "english" && post.dutch_required) {
+      return false
+    }
+    if (filters.language.length === 1 && filters.language[0] === "dutch" && !post.dutch_required) {
+      return false
+    }
+    if (filters.posted !== "any" && (post.days_open === null || post.freshness_state === "still_listed_30_plus" || post.days_open > POSTED_DAYS[filters.posted])) {
+      return false
+    }
+    if (filters.city.length > 0 && !filters.city.includes(cityOf(post))) {
+      return false
+    }
+    if (filters.type.length > 0) {
+      const kinds = jobTypesOf(post, env.signals?.[post.id])
+      if (!filters.type.some((t) => kinds.includes(t))) {
+        return false
+      }
+    }
+    if (filters.workplace.length > 0 && !filters.workplace.includes(workplaceOf(post, env.signals?.[post.id]) as Workplace)) {
+      return false
+    }
+    if (filters.source.length > 0) {
+      const names = sourceNamesOf(post)
+      if (!filters.source.some((n) => names.includes(n))) {
+        return false
+      }
+    }
+    if (filters.minPay !== null && (payMid(post, env.reference ?? null)?.month ?? 0) < filters.minPay) {
+      return false
+    }
+
+    return !filters.sponsorOnly || post.ind_sponsor
+  })
+}
+
+/** How many filters are set, for a Clear control that says so. */
+export function activeCount(filters: JobFilters): number {
+  // The starting level and the posting window are where the page begins, so they are not filters anyone has set.
+  const lists = [filters.field, filters.industry, sameSet(filters.level, STARTING_LEVELS) ? [] : filters.level, filters.type, filters.workplace, filters.city, filters.source].filter((each) => each.length > 0).length
+  // English is where the page begins, so it is not a filter anyone has set; asking for Dutch is. Both languages, or none, is no filter.
+  const language = filters.language.length === 1 && !sameSet(filters.language, DEFAULT_FILTERS.language) ? 1 : 0
+  const single = language + (filters.minPay !== null ? 1 : 0)
+
+  return lists + single + (filters.sponsorOnly ? 1 : 0) + (filters.posted !== "any" && filters.posted !== DEFAULT_FILTERS.posted ? 1 : 0) + (filters.query.trim() ? 1 : 0)
+}
+
+/** Whether the level choice is the page's starting point. */
+export const isStartingLevel = (level: ReadonlyArray<string>): boolean => sameSet(level, STARTING_LEVELS)

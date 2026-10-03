@@ -1,0 +1,518 @@
+import { mergePool } from "@/lib/sources"
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
+import { restoreSession, signOut as authSignOut, type Session } from "@/lib/auth"
+import { computeShares, type CategoryShare } from "@/lib/engine"
+import { collectedOn } from "@/lib/format"
+import type { Strength } from "@/lib/strength"
+import { migrateProfile } from "@/lib/people-migrate"
+import { keepPast, readPast } from "@/lib/suggest"
+import { useProfileFacts } from "@/lib/use-profile-facts"
+import {
+  deleteApplication,
+  fetchApplications,
+  fetchPostings,
+  fetchReference,
+  fetchSignals,
+  insertApplication,
+  loadProfile,
+  saveProfile,
+  updateStage,
+  type Reference,
+  type Signals,
+} from "@/lib/jobs"
+import { DEFAULT_PROFILE, type Application, type PastSearch, type Person, type Posting, type Profile } from "@/lib/types"
+
+const PROFILE_KEY = "careersim.profile"
+const SAVED_KEY = "careersim.saved"
+const LOCAL_POSTS_KEY = "careersim.posts"
+const SIGNALS_KEY = "careersim.signals"
+const LOCAL_APPS_KEY = "careersim.apps"
+const REFERRAL_KEY = "careersim.referrals"
+const PASSED_KEY = "careersim.passed"
+
+function read<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key)
+
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function write(key: string, value: unknown): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    return
+  }
+}
+
+interface Data {
+  status: "loading" | "ready" | "error"
+  error: string | null
+  postings: Posting[]
+  /** How the work is done, from the posting text. Null until the server has answered; filters that need it wait. */
+  signals: Record<string, Signals> | null
+  byId: Map<string, Posting>
+  shares: Record<Posting["cat"], CategoryShare> | null
+  /** When the postings were collected, worked out from them. */
+  collected: string
+  reference: Reference | null
+  profile: Profile
+  profileSaved: boolean
+  setProfile: (next: Profile) => void
+  session: Session | null
+  setSession: (session: Session | null) => void
+  signOut: () => void
+  saved: Set<string>
+  toggleSaved: (id: string) => void
+  passed: Set<string>
+  setPassed: (id: string, on: boolean) => void
+  setSaved: (id: string, on: boolean) => void
+  /** Jobs where you have a referral: ticked by hand, or a person linked to the job as your referral. */
+  referrals: Set<string>
+  /** How strong your saved profile reads for this job (strength.ts), or null until something has been read: the chance then shows without it. */
+  strengthFor: (post: Pick<Posting, "family">) => Strength | null
+  toggleReferral: (id: string) => void
+  people: Person[]
+  addPerson: (person: Omit<Person, "id">) => Person
+  updatePerson: (id: string, patch: Partial<Omit<Person, "id">>) => void
+  removePerson: (id: string) => void
+  /** Change what a job's people search has found so far (show more, drop one, add a page). Null removes it. */
+  updatePast: (postingId: string, change: (current: PastSearch | null) => PastSearch | null) => void
+  addLocalPosting: (post: Posting) => void
+  addLocalPostings: (posts: Posting[]) => void
+  removeLocalPosting: (id: string) => void
+  applications: Application[]
+  logApplication: (post: Posting, fit: string, stage?: Application["stage"]) => Promise<void>
+  changeStage: (id: Application["id"], stage: Application["stage"]) => Promise<void>
+  removeApplication: (id: Application["id"]) => Promise<void>
+}
+
+const Context = createContext<Data | null>(null)
+
+export function useData(): Data {
+  const value = useContext(Context)
+  if (!value) {
+    throw new Error("useData outside DataProvider")
+  }
+
+  return value
+}
+
+export function DataProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const [status, setStatus] = useState<Data["status"]>("loading")
+  const [error, setError] = useState<string | null>(null)
+  const [remote, setRemote] = useState<Posting[]>([])
+  // Postings merged into another (the same job found on a second platform) point at the one kept, so older saved ids still resolve.
+  const [alias, setAlias] = useState<Map<string, string>>(new Map())
+  const [local, setLocal] = useState<Posting[]>(() => read<Posting[]>(LOCAL_POSTS_KEY, []))
+  const [reference, setReference] = useState<Reference | null>(null)
+  const [signals, setSignals] = useState<Record<string, Signals> | null>(null)
+  const [profile, setProfileState] = useState<Profile>(() => migrateProfile({ ...DEFAULT_PROFILE, ...read<Partial<Profile>>(PROFILE_KEY, {}) }))
+  const [profileSaved, setProfileSaved] = useState<boolean>(false)
+  const [session, setSessionState] = useState<Session | null>(null)
+  const [saved, setSaved] = useState<Set<string>>(() => new Set(read<string[]>(SAVED_KEY, [])))
+  const [passed, setPassedState] = useState<Set<string>>(() => new Set(read<string[]>(PASSED_KEY, [])))
+  const [manualReferrals, setReferrals] = useState<Set<string>>(() => new Set(read<string[]>(REFERRAL_KEY, [])))
+
+  // Anything saved against a posting that was merged into another moves to the one kept.
+  useEffect(() => {
+    if (alias.size === 0) {
+      return
+    }
+    const remap = (prev: Set<string>): Set<string> => {
+      if (![...prev].some((id) => alias.has(id))) {
+        return prev
+      }
+
+      return new Set([...prev].map((id) => alias.get(id) ?? id))
+    }
+    setSaved(remap)
+    setPassedState(remap)
+    setReferrals(remap)
+  }, [alias])
+  const [applications, setApplications] = useState<Application[]>(() => read<Application[]>(LOCAL_APPS_KEY, []))
+  const people = profile.people ?? []
+  // A person linked to a job as your referral is the same fact as ticking it by hand, so the two are one set.
+  const referrals = useMemo(() => new Set([...manualReferrals, ...people.filter((p) => p.status === "Referred" && p.jobId).map((p) => p.jobId as string)]), [manualReferrals, people])
+  const timer = useRef<number | undefined>(undefined)
+  const profileRef = useRef<Profile>(profile)
+  profileRef.current = profile
+  const facts = useProfileFacts(profile, session)
+  // Signing in, or the saved profile arriving, reads it once; every later save reads again (see setProfile).
+  useEffect(() => {
+    if (session && profileSaved) {
+      facts.refresh()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user.id, profileSaved])
+
+  // The pool and the reference tables are public, so they load before anyone signs in.
+  useEffect(() => {
+    let live = true
+    Promise.all([fetchPostings(), fetchReference(), restoreSession()])
+      .then(([postings, ref, restored]) => {
+        if (!live) {
+          return
+        }
+        const merged = mergePool(postings)
+        setRemote(merged.jobs)
+        setAlias(merged.alias)
+        setReference(ref)
+        setSessionState(restored)
+        setStatus("ready")
+      })
+      .catch((e: unknown) => {
+        if (live) {
+          setError(e instanceof Error ? e.message : "Could not load the jobs")
+          setStatus("error")
+        }
+      })
+
+    return () => {
+      live = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (status !== "ready") {
+      return
+    }
+    let live = true
+    // What the postings' text says is found by the database with a search over every description, which is slow and can time out.
+    // So the answer is kept on this device against the state of the data (how many postings, how recent), and asked for again,
+    // with a pause between tries, only when the data changes or the first try fails.
+    const stamp = `${remote.length}:${remote.reduce((latest, p) => (p.fetched_at && p.fetched_at > latest ? p.fetched_at : latest), "")}`
+    try {
+      const cached = JSON.parse(localStorage.getItem(SIGNALS_KEY) ?? "null") as { stamp: string; data: Record<string, Signals> } | null
+      if (cached?.stamp === stamp) {
+        setSignals(cached.data)
+
+        return
+      }
+    } catch {
+      // A private window or full storage: ask the database.
+    }
+    void (async () => {
+      for (let attempt = 0; attempt < 3 && live; attempt++) {
+        try {
+          const found = await fetchSignals()
+          if (live) {
+            setSignals(found)
+            try {
+              localStorage.setItem(SIGNALS_KEY, JSON.stringify({ stamp, data: found }))
+            } catch {
+              // Too big or blocked: fine, it is asked for again next time.
+            }
+          }
+
+          return
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)))
+        }
+      }
+    })()
+
+    return () => {
+      live = false
+    }
+  }, [status])
+
+  const postings = useMemo(() => [...local, ...remote], [local, remote])
+  const byId = useMemo(() => {
+    const map = new Map(postings.map((p) => [p.id, p]))
+    for (const [from, to] of alias) {
+      const kept = map.get(to)
+      if (kept && !map.has(from)) {
+        map.set(from, kept)
+      }
+    }
+
+    return map
+  }, [postings, alias])
+  const shares = useMemo(() => (remote.length ? computeShares(remote) : null), [remote])
+  const collected = useMemo(() => collectedOn(remote), [remote])
+
+  // Signing in brings the stored profile and applications down; they win over this browser's copy.
+  useEffect(() => {
+    if (!session || status !== "ready") {
+      return
+    }
+    let live = true
+    loadProfile(session.user.id)
+      .then((stored) => {
+        if (!live) {
+          return
+        }
+        if (stored) {
+          setProfileState(migrateProfile({ ...DEFAULT_PROFILE, ...stored }))
+          setProfileSaved(true)
+        } else if (profileRef.current.onboarded) {
+          // First time this account is used: keep what was answered on this device.
+          saveProfile(session.user.id, profileRef.current)
+            .then(() => setProfileSaved(true))
+            .catch(() => undefined)
+        }
+      })
+      .catch(() => undefined)
+    fetchApplications(byId)
+      .then((rows) => live && setApplications(rows))
+      .catch(() => undefined)
+
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user.id, status])
+
+  const setProfile = useCallback(
+    (next: Profile): void => {
+      setProfileState(next)
+      write(PROFILE_KEY, next)
+      if (!session) {
+        return
+      }
+      window.clearTimeout(timer.current)
+      timer.current = window.setTimeout(() => {
+        saveProfile(session.user.id, next)
+          .then(() => {
+            setProfileSaved(true)
+            // The saved profile is what gets read, so read it once it is saved.
+            facts.refresh()
+          })
+          .catch(() => setProfileSaved(false))
+      }, 800)
+    },
+    [session, facts.refresh],
+  )
+
+  const toggleSaved = useCallback((id: string): void => {
+    setSaved((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(id)) {
+        next.add(id)
+      }
+      write(SAVED_KEY, [...next])
+
+      return next
+    })
+  }, [])
+
+  const setSaved_ = useCallback((id: string, on: boolean): void => {
+    setSaved((prev) => {
+      const next = new Set(prev)
+      if (on) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      write(SAVED_KEY, [...next])
+
+      return next
+    })
+  }, [])
+
+  const setPassed = useCallback((id: string, on: boolean): void => {
+    setPassedState((prev) => {
+      const next = new Set(prev)
+      if (on) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      write(PASSED_KEY, [...next])
+
+      return next
+    })
+  }, [])
+
+  const toggleReferral = useCallback((id: string): void => {
+    setReferrals((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(id)) {
+        next.add(id)
+      }
+      write(REFERRAL_KEY, [...next])
+
+      return next
+    })
+  }, [])
+
+  const addPerson = useCallback(
+    (person: Omit<Person, "id">): Person => {
+      const made: Person = { ...person, id: crypto.randomUUID() }
+      setProfile({ ...profileRef.current, people: [...(profileRef.current.people ?? []), made] })
+
+      return made
+    },
+    [setProfile],
+  )
+
+  const updatePerson = useCallback(
+    (id: string, patch: Partial<Omit<Person, "id">>): void => {
+      setProfile({ ...profileRef.current, people: (profileRef.current.people ?? []).map((p) => (p.id === id ? { ...p, ...patch } : p)) })
+    },
+    [setProfile],
+  )
+
+  const updatePast = useCallback(
+    (postingId: string, change: (current: PastSearch | null) => PastSearch | null): void => {
+      const current = readPast(profileRef.current.peopleFound?.[postingId])
+      setProfile({ ...profileRef.current, peopleFound: keepPast(profileRef.current.peopleFound, postingId, change(current)) })
+    },
+    [setProfile],
+  )
+
+  const removePerson = useCallback(
+    (id: string): void => {
+      setProfile({ ...profileRef.current, people: (profileRef.current.people ?? []).filter((p) => p.id !== id) })
+    },
+    [setProfile],
+  )
+
+  const addLocalPosting = useCallback((post: Posting): void => {
+    setLocal((prev) => {
+      const next = [post, ...prev]
+      write(LOCAL_POSTS_KEY, next)
+
+      return next
+    })
+  }, [])
+
+  const addLocalPostings = useCallback((posts: Posting[]): void => {
+    setLocal((prev) => {
+      const next = [...posts, ...prev]
+      write(LOCAL_POSTS_KEY, next)
+
+      return next
+    })
+  }, [])
+
+  const removeLocalPosting = useCallback((id: string): void => {
+    setLocal((prev) => {
+      const next = prev.filter((p) => p.id !== id)
+      write(LOCAL_POSTS_KEY, next)
+
+      return next
+    })
+  }, [])
+
+  const logApplication = useCallback(
+    async (post: Posting, fit: string, stage: Application["stage"] = "applied"): Promise<void> => {
+      if (session && !post.local) {
+        await insertApplication(session.user.id, post.id, fit)
+        const rows = await fetchApplications(byId)
+        const mine = rows.find((a) => a.posting_id === post.id)
+        if (mine && stage !== "applied") {
+          await updateStage(mine.id, stage)
+          mine.stage = stage
+        }
+        setApplications(rows)
+
+        return
+      }
+      const entry: Application = {
+        id: `local-${Date.now()}`,
+        posting_id: post.id,
+        title: post.title,
+        employer: post.employer_display,
+        fit_tier: fit,
+        stage,
+        logged_at: new Date().toISOString().slice(0, 10),
+      }
+      setApplications((prev) => {
+        const next = [entry, ...prev]
+        write(LOCAL_APPS_KEY, next.filter((a) => String(a.id).startsWith("local-")))
+
+        return next
+      })
+    },
+    [session, byId],
+  )
+
+  const changeStage = useCallback(
+    async (id: Application["id"], stage: Application["stage"]): Promise<void> => {
+      if (!String(id).startsWith("local-")) {
+        await updateStage(id, stage)
+      }
+      setApplications((prev) => {
+        const next = prev.map((a) => (a.id === id ? { ...a, stage } : a))
+        write(LOCAL_APPS_KEY, next.filter((a) => String(a.id).startsWith("local-")))
+
+        return next
+      })
+    },
+    [],
+  )
+
+  const removeApplication = useCallback(async (id: Application["id"]): Promise<void> => {
+    if (!String(id).startsWith("local-")) {
+      await deleteApplication(id)
+    }
+    setApplications((prev) => {
+      const next = prev.filter((a) => a.id !== id)
+      write(LOCAL_APPS_KEY, next.filter((a) => String(a.id).startsWith("local-")))
+
+      return next
+    })
+  }, [])
+
+  const value: Data = {
+    status,
+    error,
+    postings,
+    signals,
+    byId,
+    shares,
+    collected,
+    reference,
+    profile,
+    profileSaved,
+    setProfile,
+    session,
+    setSession: setSessionState,
+    signOut: () => {
+      authSignOut()
+      setSessionState(null)
+      setProfileSaved(false)
+      // The next person on this browser starts with their own answers, not the last one's.
+      for (const key of [PROFILE_KEY, SAVED_KEY, PASSED_KEY, REFERRAL_KEY, LOCAL_APPS_KEY, LOCAL_POSTS_KEY]) {
+        try {
+          window.localStorage.removeItem(key)
+        } catch {
+          continue
+        }
+      }
+      setProfileState({ ...DEFAULT_PROFILE })
+      setLocal([])
+      setSaved(new Set())
+      setPassedState(new Set())
+      setReferrals(new Set())
+      setApplications([])
+    },
+    saved,
+    toggleSaved,
+    passed,
+    setPassed,
+    setSaved: setSaved_,
+    referrals,
+    strengthFor: facts.strengthFor,
+    toggleReferral,
+    people,
+    addPerson,
+    updatePerson,
+    removePerson,
+    updatePast,
+    addLocalPosting,
+    addLocalPostings,
+    removeLocalPosting,
+    applications,
+    logApplication,
+    changeStage,
+    removeApplication,
+  }
+
+  return <Context.Provider value={value}>{children}</Context.Provider>
+}

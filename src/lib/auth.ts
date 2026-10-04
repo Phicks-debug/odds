@@ -145,6 +145,22 @@ export async function signUp(email: string, password: string): Promise<Session |
   return session
 }
 
+/** Signs in with the one-time token the verify-shoo bridge hands back. Same session shape as every other door. */
+export async function signInWithTokenHash(tokenHash: string): Promise<Session> {
+  const session = toSession(await call("verify", { type: "magiclink", token_hash: tokenHash }))
+  if (!session) {
+    throw new Error("Sign in failed")
+  }
+  keep(session)
+  try {
+    window.sessionStorage.removeItem(DEV_OUT)
+  } catch {
+    // nothing to clear
+  }
+
+  return session
+}
+
 export function signOut(): void {
   keep(null)
   try {

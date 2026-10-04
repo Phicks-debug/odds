@@ -4,6 +4,7 @@ import { Landing } from "@/components/Landing"
 import { SeekerQuestions } from "@/components/SeekerQuestions"
 import { Button } from "@/components/ui/button"
 import { signUp } from "@/lib/auth"
+import { beginShooSignIn, rememberShooNext } from "@/lib/shoo"
 import { describeChanges } from "@/lib/changes"
 import { useData } from "@/lib/data"
 import { saveDraft } from "@/lib/draft"
@@ -183,6 +184,21 @@ export function SeekerJourney({ mode, onBack, onSaved, onSignIn, onWelcome, onOp
     }
   }
 
+  // Google instead of a password: the answers ride along in the profile, and
+  // the way back knows this trip started at sign-up.
+  async function googleSignup(): Promise<void> {
+    setSaving(true)
+    setError(null)
+    try {
+      data.setProfile(toProfile(form, data.profile))
+      rememberShooNext("jobs")
+      await beginShooSignIn()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Google sign-in failed.")
+      setSaving(false)
+    }
+  }
+
   if (step === "welcome") {
     return <Landing onStart={goNext} onSignIn={onSignIn} onOpenPage={onOpenPage} />
   }
@@ -305,6 +321,11 @@ export function SeekerJourney({ mode, onBack, onSaved, onSignIn, onWelcome, onOp
       </div>
 
       <div className="flex flex-col gap-2">
+        {step === "contact" ? (
+          <Button type="button" variant="outline" disabled={saving} onClick={googleSignup} className="w-full cursor-pointer disabled:cursor-not-allowed">
+            Continue with Google
+          </Button>
+        ) : null}
         <div className="flex items-center gap-2">
           <Button type="button" variant="ghost" onClick={goBack} className="cursor-pointer">
             &larr; Back

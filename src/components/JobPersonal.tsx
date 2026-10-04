@@ -714,6 +714,30 @@ function NextMoves({ transition, postings, onPick }: { transition: Transition; p
   )
 }
 
+interface CountRowProps {
+  title: string
+  hint: string
+  on: boolean
+  set: (v: boolean) => void
+}
+
+// Settings-list pattern: what it is and what it does on the left, the switch on the right.
+function CountRow({ title, hint, on, set }: CountRowProps): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-4 py-3">
+      <div className="min-w-0">
+        <p className="font-medium">{title}</p>
+        <p className="text-sm text-muted-foreground">{hint}</p>
+      </div>
+      <button type="button" role="switch" aria-checked={on} aria-label={title} onClick={() => set(!on)} className={`relative h-7 w-12 shrink-0 cursor-pointer rounded-full transition-colors ${on ? "bg-primary" : "bg-border"}`}>
+        <span className={`absolute top-0.5 left-0.5 size-6 rounded-full bg-background shadow transition-transform ${on ? "translate-x-5" : ""}`} />
+      </button>
+    </div>
+  )
+}
+
+const PAY_ROUTES: ReadonlyArray<readonly [PermitRoute, string, string]> = [["eu", "EU/EEA", "no visa"], ["orientation_year", "Orientation", "year"], ["hsm_under_30", "Skilled worker", "under 30"], ["hsm_30_plus", "Skilled worker", "30 or older"]]
+
 /**
  * The ladder every job sits on, from entry to director, read from the postings
  * we hold: what each rung asks in years, what it states in pay, how many are open.
@@ -764,31 +788,15 @@ function CareerPath({ post, st, onPick }: { post: Posting; st: Standing; onPick?
 
   return (
     <div className="mt-6 flex flex-col gap-5 border-t pt-5">
-      {(() => {
-        // Settings-list pattern: what it is and what it does on the left, the switch on the right, and a segmented control for the one-of-four choice.
-        const Row = ({ title, hint, on, set }: { title: string; hint: string; on: boolean; set: (v: boolean) => void }): React.JSX.Element => (
-          <div className="flex items-center justify-between gap-4 py-3">
-            <div className="min-w-0">
-              <p className="font-medium">{title}</p>
-              <p className="text-sm text-muted-foreground">{hint}</p>
-            </div>
-            <button type="button" role="switch" aria-checked={on} aria-label={title} onClick={() => set(!on)} className={`relative h-7 w-12 shrink-0 cursor-pointer rounded-full transition-colors ${on ? "bg-primary" : "bg-border"}`}>
-              <span className={`absolute top-0.5 left-0.5 size-6 rounded-full bg-background shadow transition-transform ${on ? "translate-x-5" : ""}`} />
-            </button>
-          </div>
-        )
-        const ROUTES: Array<[PermitRoute, string, string]> = [["eu", "EU/EEA", "no visa"], ["orientation_year", "Orientation", "year"], ["hsm_under_30", "Skilled worker", "under 30"], ["hsm_30_plus", "Skilled worker", "30 or older"]]
-
-        return (
-          <section aria-label="Count for me" className="rounded-xl border bg-card px-4 pt-3 pb-4">
-            <h4 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Count for me</h4>
-            <div className="divide-y">
-              <Row title="30% ruling" hint={ruling ? "30% of your pay is tax-free" : "Tax on all of your pay"} on={ruling} set={(v) => choose({ ruling: v })} />
-              <Row title="Master's degree, under 30" hint="The ruling needs a lower salary" on={masterFloor} set={(v) => choose({ masterFloor: v })} />
-              <div className="py-3">
-                <p className="font-medium">Visa</p>
-                <div role="radiogroup" aria-label="My visa" className="mt-2 grid grid-cols-2 gap-1 rounded-xl bg-secondary p-1 sm:grid-cols-4">
-                  {ROUTES.map(([value, top, bottom]) => (
+      <section aria-label="Count for me" className="rounded-xl border bg-card px-4 pt-3 pb-4">
+        <h4 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Count for me</h4>
+        <div className="divide-y">
+          <CountRow title="30% ruling" hint={ruling ? "30% of your pay is tax-free" : "Tax on all of your pay"} on={ruling} set={(v: boolean): void => choose({ ruling: v })} />
+          <CountRow title="Master's degree, under 30" hint="The ruling needs a lower salary" on={masterFloor} set={(v: boolean): void => choose({ masterFloor: v })} />
+          <div className="py-3">
+            <p className="font-medium">Visa</p>
+            <div role="radiogroup" aria-label="My visa" className="mt-2 grid grid-cols-2 gap-1 rounded-xl bg-secondary p-1 sm:grid-cols-4">
+              {PAY_ROUTES.map(([value, top, bottom]) => (
                     <button key={value} type="button" role="radio" aria-checked={route === value} onClick={() => choose({ route: value })} className={`cursor-pointer rounded-lg px-2 py-2 text-center leading-tight transition-colors ${route === value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-background hover:text-foreground"}`}>
                       <span className="block text-sm font-semibold">{top}</span>
                       <span className={`block text-xs ${route === value ? "opacity-80" : ""}`}>{bottom}</span>
@@ -799,9 +807,7 @@ function CareerPath({ post, st, onPick }: { post: Posting; st: Standing; onPick?
               </div>
             </div>
             {!d.rulingEligible && ruling ? <p className="text-xs text-muted-foreground">Your answers say you may not qualify for the 30% ruling ({data.profile.abroad} of the last 24 months abroad, 16 needed). Only an employer and the tax office can confirm it.</p> : null}
-          </section>
-        )
-      })()}
+      </section>
 
       <h3 className="flex items-center gap-2 text-base font-semibold">
         This line of work, level by level

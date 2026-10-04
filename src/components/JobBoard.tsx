@@ -39,7 +39,7 @@ interface JobBoardProps {
  * the screen.
  */
 export function JobBoard({ groups, locked, empty, selected, onSelect }: JobBoardProps): React.JSX.Element {
-  const flat = useMemo(() => groups.flatMap((group) => group.jobs), [groups])
+  const flat = useMemo((): Posting[] => groups.flatMap((group) => group.jobs), [groups])
   const [shown, setShown] = useState<number>(FIRST)
   const top = useRef<HTMLDivElement | null>(null)
   const [own, setOwn] = useState<Posting | null>(null)
@@ -53,6 +53,19 @@ export function JobBoard({ groups, locked, empty, selected, onSelect }: JobBoard
   }
   const drawer = open ? <JobDrawer post={open} locked={locked} onClose={() => setOpen(null)} onSwitch={setOpen} /> : null
 
+  // Groups are cut to the page as one list, so the heading of a group that has not started yet does not show.
+  const visibles = useMemo((): Array<ReadonlyArray<Posting>> => {
+    const lists: Array<ReadonlyArray<Posting>> = []
+    let remaining: number = shown
+    for (const group of groups) {
+      const visible: ReadonlyArray<Posting> = group.jobs.slice(0, Math.max(0, remaining))
+      remaining = remaining - visible.length
+      lists.push(visible)
+    }
+
+    return lists
+  }, [groups, shown])
+
   if (flat.length === 0) {
     return (
       <>
@@ -62,15 +75,11 @@ export function JobBoard({ groups, locked, empty, selected, onSelect }: JobBoard
     )
   }
 
-  // Groups are cut to the page as one list, so the heading of a group that has not started yet does not show.
-  let budget = shown
-
   return (
     <>
       <div ref={top} className="@container scroll-mt-20 overflow-hidden rounded-xl border bg-card text-foreground">
-        {groups.map((group) => {
-          const visible = group.jobs.slice(0, Math.max(0, budget))
-          budget -= visible.length
+        {groups.map((group, index): React.JSX.Element | null => {
+          const visible: ReadonlyArray<Posting> = visibles[index] ?? []
           if (visible.length === 0) {
             return null
           }

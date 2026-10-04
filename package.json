@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "perf": "bun scripts/check-bundles.mjs",
     "preview": "vite preview",
     "test": "bun test src",
     "test:unit": "bun test src"

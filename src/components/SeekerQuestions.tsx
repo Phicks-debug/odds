@@ -1,12 +1,14 @@
-import { CvUpload } from "@/components/CvUpload"
-import { describeFilled, fillFromCv } from "@/lib/cv-parse"
-import { useState } from "react"
+import { Suspense, lazy, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useData } from "@/lib/data"
 import { parseCsv } from "@/lib/csv"
 import { DUTCH_OPTIONS, ORIGIN_OPTIONS, PERMIT_OPTIONS, STUDYING_OPTIONS, asks, type FormState, type Step } from "@/lib/journey"
+
+// Lazy like the journey itself: the upload box (with its reader and parser)
+// loads only where a CV goes in, not with the questions around it.
+const CvUpload = lazy(() => import("@/components/CvUpload").then((module) => ({ default: module.CvUpload })))
 
 interface SeekerQuestionsProps {
   error: string | null
@@ -242,16 +244,32 @@ function ImportQuestion({ review, space, wide }: { review: boolean; space: strin
         <div>
           <FieldLabel htmlFor="cv-upload">Your CV</FieldLabel>
           <div className="mt-1">
-            <CvUpload
-              text={profile.cv}
-              name={profile.cvName}
-              note={cvNote}
-              onChange={(cv, cvName, uploaded) => {
-                const f = uploaded ? fillFromCv(profile, cv) : null
-                data.setProfile({ ...profile, cv, cvName, ...(f?.patch ?? {}) })
-                setCvNote(f ? describeFilled(f.filled, profile.positions.length + profile.education.length + profile.skills.length > 0, "later") : null)
-              }}
-            />
+            <Suspense fallback={null}>
+              <CvUpload
+                text={profile.cv}
+                name={profile.cvName}
+                note={cvNote}
+                onChange={(cv, cvName, uploaded) => {
+                  if (!uploaded) {
+                    data.setProfile({ ...profile, cv, cvName })
+                    setCvNote(null)
+
+                    return
+                  }
+                  // The parser loads on first use, so it stays out of the page until then.
+                  void import("@/lib/cv-parse").then(
+                    ({ describeFilled, fillFromCv }) => {
+                      const f = fillFromCv(profile, cv)
+                      data.setProfile({ ...profile, cv, cvName, ...f.patch })
+                      setCvNote(describeFilled(f.filled, profile.positions.length + profile.education.length + profile.skills.length > 0, "later"))
+                    },
+                    () => {
+                      data.setProfile({ ...profile, cv, cvName })
+                    },
+                  )
+                }}
+              />
+            </Suspense>
           </div>
         </div>
       </div>

@@ -9,10 +9,13 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { gzipSync } from "node:zlib"
 
-// Entry is ~233 kB gzip today; any chunk tops out at the entry (~233, the
-// pdf chunk is ~129). Both caps leave ~15% headroom for dependency updates.
-const MAX_ENTRY_GZIP_KB = 270
-const MAX_CHUNK_GZIP_KB = 280
+// Entry is ~527 kB gzip today; the cap leaves headroom for dependency
+// updates. Re-baselined 4 Oct 2026 on a WORKING build: earlier caps (270)
+// were measured on a bundle built without .env.local, whose top-level throw
+// made Rolldown drop the whole app, so the "passing" bundle crashed on load.
+// Never lower this below a build made with real env values.
+const MAX_ENTRY_GZIP_KB = 600
+const MAX_CHUNK_GZIP_KB = 600
 
 const dir = new URL("../dist/assets/", import.meta.url)
 let files

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input"
 import { useData } from "@/lib/data"
 import { parseCsv } from "@/lib/csv"
 import { DUTCH_OPTIONS, ORIGIN_OPTIONS, PERMIT_OPTIONS, STUDYING_OPTIONS, asks, type FormState, type Step } from "@/lib/journey"
+import { OAUTH_PROVIDERS, type OAuthProvider } from "@/lib/pkce"
 
 // Lazy like the journey itself: the upload box (with its reader and parser)
 // loads only where a CV goes in, not with the questions around it.
@@ -18,7 +19,7 @@ interface SeekerQuestionsProps {
   review: boolean
   step: Step
   /** The account step. Signing up asks for it; settings do not. */
-  account?: { email: string; password: string; onEmail: (v: string) => void; onPassword: (v: string) => void } | null
+  account?: { onProvider: (provider: OAuthProvider) => void; disabled: boolean } | null
 }
 
 interface QuestionLabelProps {
@@ -178,15 +179,19 @@ export function SeekerQuestions({ error, form, onChange, review, step, account }
       <Field key="contact" data-invalid={error ? true : undefined}>
         <FieldLabel className="text-2xl font-semibold tracking-tight">Keep it in an account?</FieldLabel>
         <p className="mt-3 text-sm text-muted-foreground">An account keeps your profile, kept jobs and applications on every device. You can skip it and keep everything on this one.</p>
-        <div className="mt-6 flex flex-col gap-4">
-          <Field>
-            <FieldLabel htmlFor="email">Email</FieldLabel>
-            <Input id="email" type="email" autoComplete="email" placeholder="you@example.com" value={account.email} onChange={(event) => account.onEmail(event.target.value)} />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="password">Password</FieldLabel>
-            <Input id="password" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={account.password} onChange={(event) => account.onPassword(event.target.value)} />
-          </Field>
+        <div className="mt-6 flex flex-col gap-2">
+          {OAUTH_PROVIDERS.map((provider) => (
+            <Button
+              key={provider.id}
+              type="button"
+              variant="outline"
+              disabled={account.disabled}
+              onClick={() => account.onProvider(provider.id)}
+              className="w-full cursor-pointer disabled:cursor-not-allowed"
+            >
+              Continue with {provider.label}
+            </Button>
+          ))}
         </div>
         {error ? <FieldError className="mt-3">{error}</FieldError> : null}
       </Field>

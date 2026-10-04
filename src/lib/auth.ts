@@ -1,4 +1,5 @@
 import { ANON_KEY, SUPABASE_URL, setAccessToken } from "@/lib/supabase"
+import { OAUTH_CALLBACK_PATH, challengeOf, newVerifier, parseOAuthCallback, type OAuthProvider } from "@/lib/pkce"
 
 export interface Session {
   access_token: string
@@ -122,8 +123,61 @@ export async function restoreSession(): Promise<Session | null> {
   }
 }
 
-export async function signInWithPassword(email: string, password: string): Promise<Session> {
-  const session = toSession(await call("token?grant_type=password", { email, password }))
+const VERIFIER_KEY = "careersim.pkce"
+const NEXT_KEY = "careersim.oauthNext"
+
+function remember(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value)
+  } catch {
+    return
+  }
+}
+
+function recall(key: string): string | null {
+  try {
+    const value = window.sessionStorage.getItem(key)
+    window.sessionStorage.removeItem(key)
+
+    return value
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Starts SSO (Google, LinkedIn): PKCE challenge up front, provider in the
+ * browser, back to /auth/callback. The project answers from its own auth,
+ * so the session this returns is native and every policy keeps working.
+ */
+export async function beginOAuthSignIn(provider: OAuthProvider): Promise<void> {
+  const verifier = newVerifier()
+  const redirectTo = `${window.location.origin}${OAUTH_CALLBACK_PATH}`
+  remember(VERIFIER_KEY, JSON.stringify({ verifier, redirectTo }))
+  const params = new URLSearchParams({
+    provider,
+    redirect_to: redirectTo,
+    code_challenge: await challengeOf(verifier),
+    code_challenge_method: "S256",
+  })
+  window.location.assign(`${SUPABASE_URL}/auth/v1/authorize?${params}`)
+}
+
+/** Finishes SSO on /auth/callback: trades the provider code for a session. */
+export async function completeOAuthSignIn(): Promise<Session> {
+  const answer = parseOAuthCallback(window.location.href)
+  if (!answer) {
+    throw new Error("Sign-in was cancelled.")
+  }
+  if ("error" in answer) {
+    throw new Error(answer.description ?? "Sign-in failed.")
+  }
+  const stored = recall(VERIFIER_KEY)
+  const { verifier } = (stored ? JSON.parse(stored) : {}) as { verifier?: unknown }
+  if (typeof verifier !== "string" || !verifier) {
+    throw new Error("Sign-in grew stale. Start again.")
+  }
+  const session = toSession(await call("token?grant_type=pkce", { auth_code: answer.code, code_verifier: verifier }))
   if (!session) {
     throw new Error("Sign in failed")
   }
@@ -137,12 +191,14 @@ export async function signInWithPassword(email: string, password: string): Promi
   return session
 }
 
-/** Returns the session, or null when the project wants the email confirmed first. */
-export async function signUp(email: string, password: string): Promise<Session | null> {
-  const session = toSession(await call("signup", { email, password }))
-  keep(session)
+/** Remembers where the SSO trip started ("jobs" for a fresh sign-up), across the redirect. */
+export function rememberOAuthNext(next: string): void {
+  remember(NEXT_KEY, next)
+}
 
-  return session
+/** Reads and clears what rememberOAuthNext stored (null outside an SSO trip). */
+export function takeOAuthNext(): string | null {
+  return recall(NEXT_KEY)
 }
 
 export function signOut(): void {

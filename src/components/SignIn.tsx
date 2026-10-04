@@ -1,28 +1,27 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { beginOAuthSignIn } from "@/lib/auth"
-import { OAUTH_PROVIDERS, type OAuthProvider } from "@/lib/pkce"
+import { beginShooSignIn } from "@/lib/shoo"
 
 interface SignInProps {
   onCancel: () => void
   onSignedIn: () => void
 }
 
-/** The way back into an account: SSO only, then the saved profile comes down with it. */
+/** The way back into an account: Google only, then the saved profile comes down with it. */
 export function SignIn({ onCancel, onSignedIn }: SignInProps): React.JSX.Element {
-  const [busy, setBusy] = useState<OAuthProvider | null>(null)
+  const [busy, setBusy] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Leaves for the provider; the way back lands on /auth/callback, which signs in.
-  async function start(provider: OAuthProvider): Promise<void> {
-    setBusy(provider)
+  // Leaves for Google; the way back lands on /auth/callback, which signs in.
+  async function start(): Promise<void> {
+    setBusy(true)
     setError(null)
     try {
-      await beginOAuthSignIn(provider)
+      await beginShooSignIn()
       onSignedIn()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not sign in.")
-      setBusy(null)
+      setBusy(false)
     }
   }
 
@@ -33,18 +32,9 @@ export function SignIn({ onCancel, onSignedIn }: SignInProps): React.JSX.Element
       </button>
       <h1 className="text-3xl font-semibold tracking-tight">Welcome back.</h1>
       <div className="flex flex-col gap-2">
-        {OAUTH_PROVIDERS.map((provider) => (
-          <Button
-            key={provider.id}
-            type="button"
-            variant="outline"
-            disabled={busy !== null}
-            onClick={() => start(provider.id)}
-            className="w-full cursor-pointer disabled:cursor-not-allowed"
-          >
-            {busy === provider.id ? "Leaving…" : `Continue with ${provider.label}`}
-          </Button>
-        ))}
+        <Button type="button" variant="outline" disabled={busy} onClick={start} className="w-full cursor-pointer disabled:cursor-not-allowed">
+          {busy ? "Leaving…" : "Continue with Google"}
+        </Button>
         {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
       </div>
       <Button type="button" variant="ghost" onClick={onCancel} className="w-full cursor-pointer text-muted-foreground">

@@ -1,14 +1,14 @@
 import { useEffect, useRef } from "react"
 import { toast } from "sonner"
-import { completeOAuthSignIn, takeOAuthNext } from "@/lib/auth"
+import { completeShooSignIn, takeShooNext } from "@/lib/shoo"
 import { useData } from "@/lib/data"
 
-interface OAuthCallbackProps {
+interface ShooCallbackProps {
   onDone: (next: "account" | "jobs" | "signin") => void
 }
 
-/** Landing spot for the /auth/callback redirect: trades the provider code for a session, then hands back control. */
-export function OAuthCallback({ onDone }: OAuthCallbackProps): React.JSX.Element {
+/** Landing spot for Shoo's /auth/callback redirect: trades the Google code for a session, then hands back control. */
+export function ShooCallback({ onDone }: ShooCallbackProps): React.JSX.Element {
   const data = useData()
   const ran = useRef<boolean>(false)
 
@@ -20,10 +20,10 @@ export function OAuthCallback({ onDone }: OAuthCallbackProps): React.JSX.Element
     ran.current = true
     const run = async (): Promise<void> => {
       try {
-        data.setSession(await completeOAuthSignIn())
-        onDone(takeOAuthNext() === "jobs" ? "jobs" : "account")
+        data.setSession(await completeShooSignIn())
+        onDone(takeShooNext() === "jobs" ? "jobs" : "account")
       } catch (caught) {
-        toast.error(caught instanceof Error ? caught.message : "Sign-in failed.")
+        toast.error(caught instanceof Error ? caught.message : "Google sign-in failed.")
         onDone("signin")
       }
     }

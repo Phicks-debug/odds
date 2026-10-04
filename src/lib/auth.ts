@@ -1,5 +1,4 @@
 import { ANON_KEY, SUPABASE_URL, setAccessToken } from "@/lib/supabase"
-import { OAUTH_CALLBACK_PATH, challengeOf, newVerifier, parseOAuthCallback, type OAuthProvider } from "@/lib/pkce"
 
 export interface Session {
   access_token: string
@@ -98,7 +97,6 @@ export async function restoreSession(): Promise<Session | null> {
   }
 }
 
-const VERIFIER_KEY = "careersim.pkce"
 const NEXT_KEY = "careersim.oauthNext"
 
 function remember(key: string, value: string): void {
@@ -120,39 +118,9 @@ function recall(key: string): string | null {
   }
 }
 
-/**
- * Starts SSO (Google, LinkedIn): PKCE challenge up front, provider in the
- * browser, back to /auth/callback. The project answers from its own auth,
- * so the session this returns is native and every policy keeps working.
- */
-export async function beginOAuthSignIn(provider: OAuthProvider): Promise<void> {
-  const verifier = newVerifier()
-  const redirectTo = `${window.location.origin}${OAUTH_CALLBACK_PATH}`
-  remember(VERIFIER_KEY, JSON.stringify({ verifier, redirectTo }))
-  const params = new URLSearchParams({
-    provider,
-    redirect_to: redirectTo,
-    code_challenge: await challengeOf(verifier),
-    code_challenge_method: "S256",
-  })
-  window.location.assign(`${SUPABASE_URL}/auth/v1/authorize?${params}`)
-}
-
-/** Finishes SSO on /auth/callback: trades the provider code for a session. */
-export async function completeOAuthSignIn(): Promise<Session> {
-  const answer = parseOAuthCallback(window.location.href)
-  if (!answer) {
-    throw new Error("Sign-in was cancelled.")
-  }
-  if ("error" in answer) {
-    throw new Error(answer.description ?? "Sign-in failed.")
-  }
-  const stored = recall(VERIFIER_KEY)
-  const { verifier } = (stored ? JSON.parse(stored) : {}) as { verifier?: unknown }
-  if (typeof verifier !== "string" || !verifier) {
-    throw new Error("Sign-in grew stale. Start again.")
-  }
-  const session = toSession(await call("token?grant_type=pkce", { auth_code: answer.code, code_verifier: verifier }))
+/** Signs in with the one-time token the verify-shoo bridge hands back. Same session shape as every other door. */
+export async function signInWithTokenHash(tokenHash: string): Promise<Session> {
+  const session = toSession(await call("verify", { type: "magiclink", token_hash: tokenHash }))
   if (!session) {
     throw new Error("Sign in failed")
   }

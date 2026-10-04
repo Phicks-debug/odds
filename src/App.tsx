@@ -10,13 +10,13 @@ import { StaticPageView } from "@/components/StaticPages"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { OfferGate } from "@/components/OfferGate"
-import { OAuthCallback } from "@/components/OAuthCallback"
+import { ShooCallback } from "@/components/ShooCallback"
 import { Toaster } from "@/components/ui/sonner"
 import { useData } from "@/lib/data"
 import { pageFromPath, pathForPage, type StaticPage } from "@/lib/pages"
 import { clearSeenRooms, saveSeenRooms } from "@/lib/seen"
 import { clearDraft } from "@/lib/session"
-import { isOAuthCallback } from "@/lib/pkce"
+import { isShooCallback } from "@/lib/shoo"
 
 // Lazy because they carry the form schema. Someone coming back to their
 // account needs neither.
@@ -193,10 +193,10 @@ export default function App(): React.JSX.Element {
     setFormEntry("welcome")
   }
 
-  // Back from the provider: the callback URL has done its job, the page is home again.
-  const oauthReturn = isOAuthCallback(location.pathname)
+  // Back from Google: the callback URL has done its job, the page is home again.
+  const shooReturn = isShooCallback(location.pathname)
 
-  function handleOAuthDone(next: "account" | "jobs" | "signin"): void {
+  function handleShooDone(next: "account" | "jobs" | "signin"): void {
     history.replaceState({}, "", "/")
     if (next === "jobs") {
       // A fresh sign-up: the answers are saved, the draft has done its job.
@@ -267,8 +267,8 @@ export default function App(): React.JSX.Element {
           />
         ) : page ? (
           <StaticPageView page={page} onBack={closePage} onOpenPage={openPage} />
-        ) : oauthReturn ? (
-          <OAuthCallback onDone={handleOAuthDone} />
+        ) : shooReturn ? (
+          <ShooCallback onDone={handleShooDone} />
         ) : (
           <Suspense fallback={null}>
             {view === "signin" ? <SignIn onCancel={() => setView(onboarded ? "account" : "journey")} onSignedIn={() => setView("account")} /> : null}

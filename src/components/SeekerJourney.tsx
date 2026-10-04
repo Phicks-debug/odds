@@ -3,8 +3,7 @@ import { toast } from "sonner"
 import { Landing } from "@/components/Landing"
 import { SeekerQuestions } from "@/components/SeekerQuestions"
 import { Button } from "@/components/ui/button"
-import { beginOAuthSignIn, rememberOAuthNext } from "@/lib/auth"
-import { type OAuthProvider } from "@/lib/pkce"
+import { beginShooSignIn, rememberShooNext } from "@/lib/shoo"
 import { describeChanges } from "@/lib/changes"
 import { useData } from "@/lib/data"
 import { saveDraft } from "@/lib/draft"
@@ -158,15 +157,15 @@ export function SeekerJourney({ mode, onBack, onSaved, onSignIn, onWelcome, onOp
     return
   }
 
-  // SSO instead of a password: the answers ride along in the profile, and
+  // Google instead of a password: the answers ride along in the profile, and
   // the way back knows this trip started at sign-up.
-  async function oauthSignup(provider: OAuthProvider): Promise<void> {
+  async function googleSignup(): Promise<void> {
     setSaving(true)
     setError(null)
     try {
       data.setProfile(toProfile(form, data.profile))
-      rememberOAuthNext("jobs")
-      await beginOAuthSignIn(provider)
+      rememberShooNext("jobs")
+      await beginShooSignIn()
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not make the account.")
       setSaving(false)
@@ -290,7 +289,7 @@ export function SeekerJourney({ mode, onBack, onSaved, onSignIn, onWelcome, onOp
           review={review}
           step={step}
           onChange={setForm}
-          account={step === "contact" ? { onProvider: oauthSignup, disabled: saving } : null}
+          account={step === "contact" ? { onGoogle: googleSignup, disabled: saving } : null}
         />
       </div>
 

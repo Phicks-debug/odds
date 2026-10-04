@@ -45,7 +45,8 @@ async function bridgeActionLink(idToken: string): Promise<string> {
     headers: { "Content-Type": "application/json", apikey: ANON_KEY },
     body: JSON.stringify({ idToken }),
   })
-  if (res.status === 404 && !res.headers.get("content-type")?.includes("json")) {
+  // Undeployed function: the gateway answers 404 (as JSON), so there is no content-type sniffing here.
+  if (res.status === 404) {
     throw new Error("Google sign-in is not switched on yet.")
   }
   const body = (await res.json().catch(() => ({}))) as BridgeReply
@@ -59,18 +60,35 @@ async function bridgeActionLink(idToken: string): Promise<string> {
 /** Runs on /auth/callback: trades the Shoo code for a Supabase session. */
 export async function completeShooSignIn(): Promise<Session> {
   const auth = await shoo()
-  const out = await auth.finishSignIn({ clearCallbackParams: true, redirectAfter: false })
-  const idToken = out?.id_token
-  if (!idToken) {
-    throw new Error("Google sign-in was cancelled.")
+  let idToken: string
+  try {
+    const out = await auth.finishSignIn({ clearCallbackParams: true, redirectAfter: false })
+    if (!out?.id_token) {
+      throw new Error("Google sign-in was cancelled.")
+    }
+    idToken = out.id_token
+  } catch (caught) {
+    if (caught instanceof Error && caught.message === "Google sign-in was cancelled.") {
+      throw caught
+    }
+    throw new Error(`Google sign-in failed talking to Google: ${messageOf(caught)}`)
   }
-  const tokenHash = tokenHashOf(await bridgeActionLink(idToken))
+  let tokenHash: string | null
+  try {
+    tokenHash = tokenHashOf(await bridgeActionLink(idToken))
+  } catch (caught) {
+    throw new Error(`Google sign-in failed talking to our server: ${messageOf(caught)}`)
+  }
   auth.clearIdentity()
   if (!tokenHash) {
-    throw new Error("Could not open your account.")
+    throw new Error("Google sign-in failed talking to our server: empty answer.")
   }
 
   return signInWithTokenHash(tokenHash)
+}
+
+function messageOf(caught: unknown): string {
+  return caught instanceof Error && caught.message ? caught.message : "no answer"
 }
 
 /** Remembers where the Shoo trip started ("jobs" for a fresh sign-up), across the redirect. */

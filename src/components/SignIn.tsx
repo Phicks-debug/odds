@@ -4,7 +4,6 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { signInWithPassword } from "@/lib/auth"
 import { useData } from "@/lib/data"
-import { beginShooSignIn } from "@/lib/shoo"
 
 interface SignInProps {
   onCancel: () => void
@@ -33,18 +32,6 @@ export function SignIn({ onCancel, onSignedIn }: SignInProps): React.JSX.Element
     }
   }
 
-  // Leaves for Google; the way back lands on /auth/callback, which signs in.
-  async function google(): Promise<void> {
-    setBusy(true)
-    setError(null)
-    try {
-      await beginShooSignIn()
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Google sign-in failed.")
-      setBusy(false)
-    }
-  }
-
   return (
     <form onSubmit={submit} className="mx-auto flex w-full max-w-sm flex-1 flex-col gap-8 py-8 md:my-auto md:flex-none md:border md:bg-card md:p-10">
       <button type="button" onClick={onCancel} className="cursor-pointer self-start text-sm font-medium text-primary">
@@ -63,9 +50,6 @@ export function SignIn({ onCancel, onSignedIn }: SignInProps): React.JSX.Element
         </Field>
       </div>
       <div className="flex flex-col gap-2">
-        <Button type="button" variant="outline" disabled={busy} onClick={google} className="w-full cursor-pointer disabled:cursor-not-allowed">
-          Continue with Google
-        </Button>
         <Button type="submit" size="lg" disabled={busy} className="w-full cursor-pointer disabled:cursor-not-allowed">
           {busy ? "Signing in" : "Sign in"}
         </Button>

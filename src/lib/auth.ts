@@ -75,36 +75,11 @@ function toSession(data: AuthResponse): Session | null {
   }
 }
 
-const DEV_OUT = "careersim.devSignedOut"
-
-/**
- * Local development only: signs in with the account named in .env.local (VITE_DEV_EMAIL and VITE_DEV_PASSWORD), so
- * testing needs no form. Vite removes this branch from a production build. Signing out stays signed out until the tab closes.
- */
-async function devSignIn(): Promise<Session | null> {
-  if (!import.meta.env.DEV) {
-    return null
-  }
-  const email = import.meta.env.VITE_DEV_EMAIL as string | undefined
-  const password = import.meta.env.VITE_DEV_PASSWORD as string | undefined
-  try {
-    if (!email || !password || window.sessionStorage.getItem(DEV_OUT)) {
-      return null
-    }
-    const session = toSession(await call("token?grant_type=password", { email, password }))
-    keep(session)
-
-    return session
-  } catch {
-    return null
-  }
-}
-
 /** Restores the stored session, refreshing it when it is about to expire. */
 export async function restoreSession(): Promise<Session | null> {
   const stored = loadSession()
   if (!stored) {
-    return devSignIn()
+    return null
   }
   if (stored.expires_at - 60 > Math.floor(Date.now() / 1000)) {
     keep(stored)
@@ -182,11 +157,6 @@ export async function completeOAuthSignIn(): Promise<Session> {
     throw new Error("Sign in failed")
   }
   keep(session)
-  try {
-    window.sessionStorage.removeItem(DEV_OUT)
-  } catch {
-    // nothing to clear
-  }
 
   return session
 }
@@ -203,9 +173,4 @@ export function takeOAuthNext(): string | null {
 
 export function signOut(): void {
   keep(null)
-  try {
-    window.sessionStorage.setItem(DEV_OUT, "1")
-  } catch {
-    return
-  }
 }
